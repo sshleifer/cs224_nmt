@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from model_embeddings import ModelEmbeddings
+from utils import reshape_last_hidden
 Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
 
 
@@ -42,7 +43,7 @@ class NMT(nn.Module):
         self.vocab = vocab
 
         # default values
-        self.encoder = nn.LSTM(self.embed_size, self.hidden_size,  bias=True, bidirectional=True)
+        self.encoder = nn.LSTM(embed_size, self.hidden_size,  bias=True, bidirectional=True)
         self.decoder = nn.LSTMCell(hidden_size, hidden_size) # shape seems wrong
         self.h_projection = nn.Linear(hidden_size, 2*hidden_size)
         self.c_projection = nn.Linear(hidden_size, 2*hidden_size)
@@ -50,6 +51,8 @@ class NMT(nn.Module):
         self.combined_output_projection = nn.Linear(hidden_size, 3*hidden_size)
         self.target_vocab_projection = nn.Linear(hidden_size, len(vocab.tgt), bias=False)
         self.dropout = nn.Dropout(dropout_rate)
+
+
 
 
         ### YOUR CODE HERE (~8 Lines)
@@ -130,6 +133,17 @@ class NMT(nn.Module):
                                                 hidden state and cell.
         """
         enc_hiddens, dec_init_state = None, None
+        b, src_len = source_padded.shape
+
+        X = self.model_embeddings.source(source_padded) # need to cut to src_len
+        packed = pack_padded_sequence(X, source_lengths)
+        enc_hiddens, last_hidden, last_cell = self.encoder(packed)
+        enc_hiddens = pad_packed_sequence(enc_hiddens).view(b, src_len, self.hidden_size*2)
+        init_decoder_hidden = self.h_projection(reshape_last_hidden(last_hidden))
+        init_decoder_cell = self.c_projection(reshape_last_hidden(last_cell))
+
+        dec_init_state = (init_decoder_hidden, init_decoder_cell)
+
 
         ### YOUR CODE HERE (~ 8 Lines)
         ### TODO:
