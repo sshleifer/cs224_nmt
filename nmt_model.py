@@ -22,14 +22,20 @@ Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
 from gpu_utils import to_gpu
 
 
+def shape_assert(a, b):
+    if hasattr(b, 'shape'):
+        message = f'a.shape = {a.shape[0]} but b.shape = {b.shape[0]}'
+        assert a.shape[0] == b.shape[0], message
+    else:  # assert a.shape == b
+        message = f'a.shape = {a.shape[0]} but wanted = {b}'
+        assert a.shape == b, message
+
 def reshape_last_hidden(x, b, h):
     """Concatenate forwards and backwards tensors to obtain a tensor shape (b, 2h)"""
-    print('x', x.shape)
     i0, i1 = to_gpu(torch.tensor(0)), to_gpu(torch.tensor(1))
     r0, r1 = x.index_select(0, i0), x.index_select(0, i1)
-    print(f'r0:{r0.shape}, b:{b}, h{h}')
-    result = torch.cat([r0, r1], -1).view(b, 2*h)
-    return result
+    catted = torch.cat([r0, r1], -1)
+    return catted.view(b, 2*h)
 
 
 
@@ -53,15 +59,16 @@ class NMT(nn.Module):
         self.hidden_size = hidden_size
         self.dropout_rate = dropout_rate
         self.vocab = vocab
+        h = hidden_size
 
         # default values
-        self.encoder = nn.LSTM(embed_size, hidden_size,  bias=True, bidirectional=True)
-        self.decoder = nn.LSTMCell(hidden_size, hidden_size) # shape seems wrong
-        self.h_projection = nn.Linear(2*hidden_size, hidden_size)
-        self.c_projection = nn.Linear( 2*hidden_size, hidden_size)
-        self.att_projection = nn.Linear(hidden_size, 2 * hidden_size)
-        self.combined_output_projection = nn.Linear(hidden_size, 3*hidden_size)
-        self.target_vocab_projection = nn.Linear(hidden_size, len(vocab.tgt), bias=False)
+        self.encoder = nn.LSTM(embed_size, h, bias=True, bidirectional=True)
+        self.decoder = nn.LSTMCell(h+embed_size, h, bias=True) # shape seems wrong
+        self.h_projection = nn.Linear(2 * h, h, bias=False)
+        self.c_projection = nn.Linear(2 * h, h, bias=False)
+        self.att_projection = nn.Linear(2 * h, h, bias=False)
+        self.combined_output_projection = nn.Linear(h, 3 * h, bias=False)
+        self.target_vocab_projection = nn.Linear(h, len(vocab.tgt), bias=False)
         self.dropout = nn.Dropout(dropout_rate)
 
 
@@ -147,7 +154,8 @@ class NMT(nn.Module):
         #import ipdb; ipdb.set_trace()
         print(f'enc_hiddens_unpacked.shape after padding: {enc_hiddens_unpacked.shape}')
         print(f'src_len2: {src_len_2}')
-        enc_hiddens_unpacked = enc_hiddens_unpacked.view(b, src_len, self.hidden_size * 2) # noop?
+        #enc_hiddens_unpacked = enc_hiddens_unpacked.view(b, src_len, self.hidden_size * 2) # noop?
+        enc_hiddens_unpacked = enc_hiddens_unpacked.permute(1, 0, 2)
 
         assert last_hidden.shape == (2, b, self.hidden_size), f'shape: {last_hidden.shape} not {(2, b, self.hidden_size)}'
         reshaped_last_hidden = reshape_last_hidden(last_hidden, b, self.hidden_size)
@@ -212,6 +220,7 @@ class NMT(nn.Module):
                                         tgt_len = maximum target sentence length, b = batch_size,  h = hidden size
         """
         # Chop of the <END> token for max length sentences.
+        b, src_len, _ = enc_hiddens.shape
         target_padded = target_padded[:-1]
 
         # Initialize the decoder state (hidden and cell)
@@ -223,6 +232,28 @@ class NMT(nn.Module):
 
         # Initialize a list we will use to collect the combined output o_t on each step
         combined_outputs = []
+        print(f'enc_hiddens: {enc_hiddens.shape}')
+        enc_hiddens_proj = self.att_projection(enc_hiddens)
+
+        # enc_hiddens_proj = dec_state.transpose(0, 1).dot(self.att_projection.weight).dot(enc_hiddens)
+
+        shape_assert(enc_hiddens_proj,  (b, src_len, self.hidden_size))
+        Y = self.model_embeddings.target(target_padded)  # (src_len, b, e)
+        print(f'Y.shape: {Y.shape}')
+        splat = torch.split(Y, 1, dim=0)
+        for yt in splat:
+            #(1, b, e)
+            yts = torch.squeeze(yt, dim=0)
+            print(f'')
+            Ybar_t = torch.cat([yts, o_prev])
+            dec_state, combined_output, e_t = self.step(
+                Ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks
+            )
+            combined_outputs.append(combined_output)
+            o_prev = combined_output # Update o_prev to the new o_t. PROLLY WRONG
+
+
+        combined_outputs = torch.stack(combined_outputs)
 
         ### YOUR CODE HERE (~9 Lines)
         ### TODO:
@@ -294,6 +325,12 @@ class NMT(nn.Module):
         """
 
         combined_output = None
+        #import ipdb; ipdb.set_trace()
+        new_dec_state = self.decoder(Ybar_t, dec_state)
+        dec_hidden, dec_cell = new_dec_state
+        # need some squeezing and unsqueezing
+        #e_t = torch.bmm(new_dec_state.transpose(0,1), enc_hiddens_proj)
+
 
         ### YOUR CODE HERE (~3 Lines)
         ### TODO:

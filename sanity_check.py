@@ -83,7 +83,6 @@ def generate_outputs(model, source, target, vocab):
     torch.save(enc_masks, './sanity_check_en_es_data/enc_masks.pkl')
     torch.save(combined_outputs, './sanity_check_en_es_data/combined_outputs.pkl')
 
-
 def question_1d_sanity_check(model, src_sents, tgt_sents, vocab):
     """ Sanity check for question 1d. 
         Compares student output to that of model with dummy data.
