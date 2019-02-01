@@ -17,8 +17,20 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from model_embeddings import ModelEmbeddings
-from utils import reshape_last_hidden
 Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
+
+from gpu_utils import to_gpu
+
+
+def reshape_last_hidden(x, b, h):
+    """Concatenate forwards and backwards tensors to obtain a tensor shape (b, 2h)"""
+    print('x', x.shape)
+    i0, i1 = to_gpu(torch.tensor(0)), to_gpu(torch.tensor(1))
+    r0, r1 = x.index_select(0, i0), x.index_select(0, i1)
+    print(f'r0:{r0.shape}, b:{b}, h{h}')
+    result = torch.cat([r0, r1], -1).view(b, 2*h)
+    return result
+
 
 
 class NMT(nn.Module):
@@ -43,10 +55,10 @@ class NMT(nn.Module):
         self.vocab = vocab
 
         # default values
-        self.encoder = nn.LSTM(embed_size, self.hidden_size,  bias=True, bidirectional=True)
+        self.encoder = nn.LSTM(embed_size, hidden_size,  bias=True, bidirectional=True)
         self.decoder = nn.LSTMCell(hidden_size, hidden_size) # shape seems wrong
-        self.h_projection = nn.Linear(hidden_size, 2*hidden_size)
-        self.c_projection = nn.Linear(hidden_size, 2*hidden_size)
+        self.h_projection = nn.Linear(2*hidden_size, hidden_size)
+        self.c_projection = nn.Linear( 2*hidden_size, hidden_size)
         self.att_projection = nn.Linear(hidden_size, 2 * hidden_size)
         self.combined_output_projection = nn.Linear(hidden_size, 3*hidden_size)
         self.target_vocab_projection = nn.Linear(hidden_size, len(vocab.tgt), bias=False)
@@ -65,16 +77,6 @@ class NMT(nn.Module):
         ###     self.combined_output_projection (Linear Layer with no bias), called W_{u} in the PDF.
         ###     self.target_vocab_projection (Linear Layer with no bias), called W_{vocab} in the PDF.
         ###     self.dropout (Dropout Layer)
-        ###
-        ### Use the following docs to properly initialize these variables:
-        ###     LSTM:
-        ###         https://pytorch.org/docs/stable/nn.html#torch.nn.LSTM
-        ###     LSTM Cell:
-        ###         https://pytorch.org/docs/stable/nn.html#torch.nn.LSTMCell
-        ###     Linear Layer:
-        ###         https://pytorch.org/docs/stable/nn.html#torch.nn.Linear
-        ###     Dropout Layer:
-        ###         https://pytorch.org/docs/stable/nn.html#torch.nn.Dropout
 
 
         ### END YOUR CODE
@@ -132,15 +134,26 @@ class NMT(nn.Module):
         @returns dec_init_state (tuple(Tensor, Tensor)): Tuple of tensors representing the decoder's initial
                                                 hidden state and cell.
         """
-        enc_hiddens, dec_init_state = None, None
-        b, src_len = source_padded.shape
+        src_len, b = source_padded.shape
 
         X = self.model_embeddings.source(source_padded) # need to cut to src_len
+        print(f'Source_embs: {X.shape}, b:{b}, src_len:{src_len}')
         packed = pack_padded_sequence(X, source_lengths)
-        enc_hiddens, last_hidden, last_cell = self.encoder(packed)
-        enc_hiddens = pad_packed_sequence(enc_hiddens).view(b, src_len, self.hidden_size*2)
-        init_decoder_hidden = self.h_projection(reshape_last_hidden(last_hidden))
-        init_decoder_cell = self.c_projection(reshape_last_hidden(last_cell))
+        print(f'packed[0]:{packed[0].shape}')
+        # import ipdb; ipdb.set_trace()
+        enc_hiddens, (last_hidden, last_cell) = self.encoder(packed)
+        #print(f'enc_hiddens.shape: {enc_hiddens.shape}')
+        enc_hiddens_unpacked, src_len_2 = pad_packed_sequence(enc_hiddens)
+        #import ipdb; ipdb.set_trace()
+        print(f'enc_hiddens_unpacked.shape after padding: {enc_hiddens_unpacked.shape}')
+        print(f'src_len2: {src_len_2}')
+        enc_hiddens_unpacked = enc_hiddens_unpacked.view(b, src_len, self.hidden_size * 2) # noop?
+
+        assert last_hidden.shape == (2, b, self.hidden_size), f'shape: {last_hidden.shape} not {(2, b, self.hidden_size)}'
+        reshaped_last_hidden = reshape_last_hidden(last_hidden, b, self.hidden_size)
+        print(f'reshaped_last_hidden.shape:{reshaped_last_hidden.shape}')
+        init_decoder_hidden = self.h_projection(reshaped_last_hidden)
+        init_decoder_cell = self.c_projection(reshape_last_hidden(last_cell, b, self.hidden_size))
 
         dec_init_state = (init_decoder_hidden, init_decoder_cell)
 
@@ -180,7 +193,7 @@ class NMT(nn.Module):
 
         ### END YOUR CODE
 
-        return enc_hiddens, dec_init_state
+        return enc_hiddens_unpacked, dec_init_state
 
 
     def decode(self, enc_hiddens: torch.Tensor, enc_masks: torch.Tensor,

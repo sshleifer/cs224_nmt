@@ -17,15 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-from gpu_utils import to_gpu
-
-
-def reshape_last_hidden(x):
-    """Concatenate forwards and backwards tensors to obtain a tensor shape (b, 2h)"""
-    i0, i1 = to_gpu(torch.tensor(0)), to_gpu(torch.tensor(1))
-    r0, r1 = x.index_select(0, i0), x.index_select(0, i1)
-    result = torch.cat([r0, r1], -1).view(b, 2*h)
-    return result
 
 def pad_sents(sents, pad_token):
     """ Pad list of sentences according to the longest sentence in the batch.
