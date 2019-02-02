@@ -19,7 +19,13 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from model_embeddings import ModelEmbeddings
 Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
 
-from gpu_utils import to_gpu
+
+import torch
+
+USE_GPU = torch.cuda.is_available()
+def to_gpu(x, *args, **kwargs):
+    '''puts pytorch variable to gpu, if cuda is available and USE_GPU is set to true. '''
+    return x.cuda(*args, **kwargs) if USE_GPU else x
 
 
 def shape_assert(a, b):
