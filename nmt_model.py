@@ -67,7 +67,7 @@ class NMT(nn.Module):
         self.h_projection = nn.Linear(2 * h, h, bias=False)
         self.c_projection = nn.Linear(2 * h, h, bias=False)
         self.att_projection = nn.Linear(2 * h, h, bias=False)
-        self.combined_output_projection = nn.Linear(h, 3 * h, bias=False)
+        self.combined_output_projection = nn.Linear(3 * h, h, bias=False)
         self.target_vocab_projection = nn.Linear(h, len(vocab.tgt), bias=False)
         self.dropout = nn.Dropout(dropout_rate)
 
@@ -240,17 +240,18 @@ class NMT(nn.Module):
         shape_assert(enc_hiddens_proj,  (b, src_len, self.hidden_size))
         Y = self.model_embeddings.target(target_padded)  # (src_len, b, e)
         print(f'Y.shape: {Y.shape}')
-        splat = torch.split(Y, 1, dim=0)
-        for yt in splat:
+        for yt in torch.split(Y, 1, dim=0):
             #(1, b, e)
             yts = torch.squeeze(yt, dim=0)
-            print(f'')
-            Ybar_t = torch.cat([yts, o_prev])
+            Ybar_t = torch.cat([yts, o_prev], axis=0)
+            print(f'Ybar_t: {Ybar_t.shape}')
             dec_state, combined_output, e_t = self.step(
                 Ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks
             )
             combined_outputs.append(combined_output)
-            o_prev = combined_output # Update o_prev to the new o_t. PROLLY WRONG
+            o_prev = combined_output
+
+        print(combined_outputs)
 
 
         combined_outputs = torch.stack(combined_outputs)
@@ -323,14 +324,9 @@ class NMT(nn.Module):
                                       We are simply returning this value so that we can sanity check
                                       your implementation.
         """
-
-        combined_output = None
-        #import ipdb; ipdb.set_trace()
         new_dec_state = self.decoder(Ybar_t, dec_state)
         dec_hidden, dec_cell = new_dec_state
-        # need some squeezing and unsqueezing
-        #e_t = torch.bmm(new_dec_state.transpose(0,1), enc_hiddens_proj)
-
+        e_t = torch.bmm(enc_hiddens_proj, dec_hidden.unsqueeze(-1)).squeeze(2)
 
         ### YOUR CODE HERE (~3 Lines)
         ### TODO:
@@ -361,6 +357,12 @@ class NMT(nn.Module):
         # Set e_t to -inf where enc_masks has 1
         if enc_masks is not None:
             e_t.data.masked_fill_(enc_masks.byte(), -float('inf'))
+        alpha_t = F.softmax(e_t, 1)
+        a_t = torch.bmm(alpha_t.unsqueeze(1), enc_hiddens).squeeze(1)
+        # import ipdb; ipdb.set_trace()
+        U_t = torch.cat([dec_hidden, a_t], dim=1)
+        V_t = self.combined_output_projection(U_t)
+        O_t = self.dropout(torch.tanh(V_t))
 
         ### YOUR CODE HERE (~6 Lines)
         ### TODO:
@@ -394,7 +396,7 @@ class NMT(nn.Module):
         ### END YOUR CODE
 
         combined_output = O_t
-        return dec_state, combined_output, e_t
+        return new_dec_state, combined_output, e_t
 
     def generate_sent_masks(self, enc_hiddens: torch.Tensor, source_lengths: List[int]) -> torch.Tensor:
         """ Generate sentence masks for encoder hidden states.
