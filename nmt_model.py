@@ -24,8 +24,8 @@ from gpu_utils import to_gpu
 
 def shape_assert(a, b):
     if hasattr(b, 'shape'):
-        message = f'a.shape = {a.shape[0]} but b.shape = {b.shape[0]}'
-        assert a.shape[0] == b.shape[0], message
+        message = f'a.shape = {a.shape} but b.shape = {b.shape}'
+        assert a.shape == b.shape, message
     else:  # assert a.shape == b
         message = f'a.shape = {a.shape[0]} but wanted = {b}'
         assert a.shape == b, message
@@ -144,22 +144,13 @@ class NMT(nn.Module):
         src_len, b = source_padded.shape
 
         X = self.model_embeddings.source(source_padded) # need to cut to src_len
-        print(f'Source_embs: {X.shape}, b:{b}, src_len:{src_len}')
         packed = pack_padded_sequence(X, source_lengths)
-        print(f'packed[0]:{packed[0].shape}')
-        # import ipdb; ipdb.set_trace()
         enc_hiddens, (last_hidden, last_cell) = self.encoder(packed)
-        #print(f'enc_hiddens.shape: {enc_hiddens.shape}')
-        enc_hiddens_unpacked, src_len_2 = pad_packed_sequence(enc_hiddens)
-        #import ipdb; ipdb.set_trace()
-        print(f'enc_hiddens_unpacked.shape after padding: {enc_hiddens_unpacked.shape}')
-        print(f'src_len2: {src_len_2}')
-        #enc_hiddens_unpacked = enc_hiddens_unpacked.view(b, src_len, self.hidden_size * 2) # noop?
+        enc_hiddens_unpacked, _ = pad_packed_sequence(enc_hiddens)
         enc_hiddens_unpacked = enc_hiddens_unpacked.permute(1, 0, 2)
 
         assert last_hidden.shape == (2, b, self.hidden_size), f'shape: {last_hidden.shape} not {(2, b, self.hidden_size)}'
         reshaped_last_hidden = reshape_last_hidden(last_hidden, b, self.hidden_size)
-        print(f'reshaped_last_hidden.shape:{reshaped_last_hidden.shape}')
         init_decoder_hidden = self.h_projection(reshaped_last_hidden)
         init_decoder_cell = self.c_projection(reshape_last_hidden(last_cell, b, self.hidden_size))
 
@@ -233,15 +224,12 @@ class NMT(nn.Module):
         # Initialize a list we will use to collect the combined output o_t on each step
         combined_outputs = []
         enc_hiddens_proj = self.att_projection(enc_hiddens)
-
-        # enc_hiddens_proj = dec_state.transpose(0, 1).dot(self.att_projection.weight).dot(enc_hiddens)
-
         shape_assert(enc_hiddens_proj,  (b, src_len, self.hidden_size))
         Y = self.model_embeddings.target(target_padded)  # (src_len, b, e)
         for yt in torch.split(Y, 1, dim=0):
-            #(1, b, e)
-            yts = torch.squeeze(yt, dim=0)
-            Ybar_t = torch.cat([yts, o_prev], dim=0)
+            #yt.shape = (1, b, e)
+            yts = torch.squeeze(yt, dim=0) # (b, e)
+            Ybar_t = torch.cat([yts, o_prev], dim=1)
             dec_state, combined_output, e_t = self.step(
                 Ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks
             )
