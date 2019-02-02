@@ -232,27 +232,21 @@ class NMT(nn.Module):
 
         # Initialize a list we will use to collect the combined output o_t on each step
         combined_outputs = []
-        print(f'enc_hiddens: {enc_hiddens.shape}')
         enc_hiddens_proj = self.att_projection(enc_hiddens)
 
         # enc_hiddens_proj = dec_state.transpose(0, 1).dot(self.att_projection.weight).dot(enc_hiddens)
 
         shape_assert(enc_hiddens_proj,  (b, src_len, self.hidden_size))
         Y = self.model_embeddings.target(target_padded)  # (src_len, b, e)
-        print(f'Y.shape: {Y.shape}')
         for yt in torch.split(Y, 1, dim=0):
             #(1, b, e)
             yts = torch.squeeze(yt, dim=0)
-            Ybar_t = torch.cat([yts, o_prev], axis=0)
-            print(f'Ybar_t: {Ybar_t.shape}')
+            Ybar_t = torch.cat([yts, o_prev], dim=0)
             dec_state, combined_output, e_t = self.step(
                 Ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks
             )
             combined_outputs.append(combined_output)
             o_prev = combined_output
-
-        print(combined_outputs)
-
 
         combined_outputs = torch.stack(combined_outputs)
 
